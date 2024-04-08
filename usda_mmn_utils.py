@@ -8,9 +8,30 @@ import pandas as pd
 import requests
 import json
 import os
-from datetime import date
+from datetime import datetime, timedelta
 import pickle
 
+# ------------------------------------------------------------------------------------------------------------------------------------
+# get_mars_response
+# Description:
+#   This is the basic MARS API request function. 'MARS' is the name USDA uses for its API for interacting with their "My Market News"
+#   reports. 
+# Input:
+#   url_add_on_str: This is an optional string parameter that extends the root url which is needed to access deeper parts of their 
+#   database
+# Output:
+#   resp: The raw response   
+# Note: 
+#   USDA MARS API uses HTML basic auth. So you need to use this "API key", not as an API key, but as a username. 
+# ------------------------------------------------------------------------------------------------------------------------------------
+def get_mars_response(url_add_on_str = None):
+    url = 'https://marsapi.ams.usda.gov/services/v1.2/reports'
+    if url_add_on_str is not None:
+        url = url+url_add_on_str
+    username = os.getenv("USDA_MARS_API_KEY")   # You need to store your API key as a User Variable in Windows or store it in .bashrc 
+    headers={'username':username}   
+    resp = requests.get(url, auth = (username, "")) # This is the API call to the USDA MMN database
+    return(resp)
 
 # ------------------------------------------------------------------------------------------------------------------------------------
 # get_markets_list
@@ -28,11 +49,7 @@ def get_markets_list():
         except Exception as e:
             print("Exception <" + e + "> occurred while trying to read markets_db.csv file")
     else:   # This will execute only if you accidentally delete the markets_db.csv file 
-        url = 'https://marsapi.ams.usda.gov/services/v1.2/reports'
-        username = os.getenv("USDA_MARS_API_KEY")   # You need to store your API key as a User Variable in Windows or store it in .bashrc 
-        headers={'username':username}   # USDA MARS API uses HTML basic auth. So you need to use this "API key", not as an API key, but
-                                        # as a username
-        resp = requests.get(url, auth = (username, "")) # This is the API call to the USDA MMN database
+        resp = get_mars_response()  # This is the API call to the USDA MMN database
 
         # Clean up the data and retrieve only relevant information
         raw_data = pd.DataFrame.from_dict(json.loads(resp.text))
@@ -122,7 +139,7 @@ def get_market_name(slug_id):
 # Inputs:
 #   commodity
 #       The name of the commodity as it appears in the USDA database. To see a list of possible commodities, use the function 
-#       get_commodities_list(). This parameter is mandatory.
+#       get_commodities_list(). This parameter is mandatory. 
 #   slug_id 
 #       The market identification number (string)  corresponding to the terminal market in USDA database. USDA calls this "slug_id" for  
 #       unknown reason. It is a 4 digits numeric ID. To see a list of terminal makets and their corresponding slug_ids, use the function
@@ -151,26 +168,22 @@ def get_prices(commodity, slug_id, start_year, end_year = None, market_name=None
     if end_year is None:
         end_year = start_year
     date_str = "01/01/"+str(start_year)+":12/31/"+str(end_year)
-    filter_dict = {'commodity':"Tomatoes", 'report_begin_date':date_str}
+    filter_dict = {'commodity':commodity, 'report_begin_date':date_str}
     filter_str = ""
     for key in filter_dict.keys():
         filter_str = filter_str+key+"="
         filter_str = filter_str+filter_dict[key]+";"
     #print(filter_str)
 
-    url = "https://marsapi.ams.usda.gov/services/v1.2/reports"+"/"+slug_id
-    username = os.getenv("USDA_MARS_API_KEY")   # You need to store your API key as a User Variable in Windows or store it in .bashrc 
-    url = url + "?q="+ filter_str + "&allSections=true"
-    response = requests.get(url, auth = (username, ""))
-
+    url_append = "/"+slug_id +  "?q="+ filter_str + "&allSections=true"
+    response = get_mars_response(url_append)
     raw_data = json.loads(response.text)
-
     raw_df = pd.DataFrame(raw_data[1]['results'])
-    prices_df = raw_df[['report_date','slug_id','variety', 'package','item_size','properties','grade','organic','origin','low_price','high_price','unit_sales']]
-
+    prices_df = raw_df[['report_date','slug_id', 'commodity','variety', 'package','item_size','properties','grade','organic',\
+                        'origin','low_price','high_price','unit_sales']]
     market_name = get_market_name(slug_id)
     market_name1 = "_".join(market_name.split())
-    cache_filename = market_name1 + str(start_year) + ".csv"
+    cache_filename = market_name1 + "_" + str(start_year) + ".csv"
     raw_df.to_csv('cache/'+cache_filename)
     return(prices_df)
         
@@ -191,7 +204,7 @@ def get_prices(commodity, slug_id, start_year, end_year = None, market_name=None
 #   commodities_list
 #       A list (python list) of commodity names
 # ------------------------------------------------------------------------------------------------------------------------------------
-def get_commodities_list(slug_id, market_name):
+def get_commodities_list(slug_id, market_name=None):
     # Check for missing arguments and do other sanity checks
     if (slug_id is None) and (market_name is None):
         print("You must pass a slug_id or a market_name")
@@ -199,16 +212,29 @@ def get_commodities_list(slug_id, market_name):
     elif (slug_id is not None) and (market_name is not None):
         print("Passing both arguments is discouraged. In this case, slug_id will be used and market_name will be ignored")
     elif (slug_id is None) and (market_name is not None):
-        markets_df = get_slug_id(market_name)
+        slug_id = get_slug_id(market_name)
 
     # Finally we are ready to actually create the commodity list
-    filename = "commodities_list"+slug_id+".csv"
+    filename = "cache/commodities_list_"+slug_id+".pkl"
     if os.path.exists(filename):
-        commodities_list = pickle.load(filename)
+        with open(filename, 'rb') as fp:
+            commodities_list = pickle.load(fp)
     else:
-        # Create the commodities list from a year's worth of data from the market in question. We assume that all commodities ever
-        # traded in a market can be found within a year's worth of data. We use the latest full year for this purpose
-        prices_df = get_prices()
+        # Create the commodities list from ten days worth of data from the market in question. We assume that all commodities ever
+        # traded in a market can be found within ten day's worth of data. We use the latest 10 days for this purpose
+        end_date = datetime.today().strftime("%m/%d/%Y")
+        start_date = (datetime.today() - timedelta(days=10)).strftime("%m/%d/%Y")
+        filter_str = "report_begin_date="+start_date+":"+end_date
+        url_append = "/"+slug_id +  "?q="+ filter_str + "&allSections=true"
+        response = get_mars_response(url_append)
+        raw_data = json.loads(response.text)
+        raw_df = pd.DataFrame(raw_data[1]['results'])
+        prices_df = raw_df[['report_date','slug_id', 'commodity','variety', 'package','item_size','properties','grade','organic',\
+                            'origin','low_price','high_price','unit_sales']]
+        commodities_list = list(prices_df['commodity'].unique())
+        with open(filename, 'wb') as fp:
+            pickle.dump(commodities_list, fp)
+    return(commodities_list)
 
     
 
