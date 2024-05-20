@@ -2,6 +2,7 @@
 # usda_mmn_utils.py
 # Description:
 #   This is a collection of utility functions that can be used by other code. 
+# TODO: Use .format method or a better way to pass parameters Ref: https://github.com/systemcatch/eiapy/blob/master/eiapy.py
 # ------------------------------------------------------------------------------------------------------------------------------------
 
 import pandas as pd
@@ -130,12 +131,13 @@ def get_market_name(slug_id):
     return(market_name)
 
 # ------------------------------------------------------------------------------------------------------------------------------------
-# get_prices
-# Descriptions:
-#   Downloads the price data for a commodity available in USDA database for given years . The function doesn't offer any flexibility
+# get_prices_1y
+# Description:
+#   Downloads the price data for a commodity available in USDA database for the given year. The function doesn't offer any flexibility
 #   with respect to using filters, such as requesting data only related to organic produce, specific variety of the produce etc.,
-#   simply because the data retreived without filters is only a few MBs. This function implements caching of data to avoid 
+#   simply because the data retreived without filters is only a few MBs. The function implements caching of data to avoid 
 #   unnecessary API requests to the USDA database. This caching is opaque to the user. 
+#
 # Inputs:
 #   commodity
 #       The name of the commodity as it appears in the USDA database. To see a list of possible commodities, use the function 
@@ -143,16 +145,60 @@ def get_market_name(slug_id):
 #   slug_id 
 #       The market identification number (string)  corresponding to the terminal market in USDA database. USDA calls this "slug_id" for  
 #       unknown reason. It is a 4 digits numeric ID. To see a list of terminal makets and their corresponding slug_ids, use the function
-#       get_markets_list(). This parameter is mandatory if market_name isn't specified.
+#       get_markets_list(). This parameter is mandatory.
+#   year
+#       Year as a number (and not a string) in YYYY format. This parameter is mandatory
+#   debug_prints:
+#       This is used to display debug prints. The default value is True. User can set it to False if needed. 
+# ------------------------------------------------------------------------------------------------------------------------------------
+def get_prices_1y(commodity, slug_id, year, debug_prints=True): 
+    market_name = get_market_name(slug_id)
+    market_name1 = "_".join(market_name.split())
+    cache_filename = market_name1 + "_"+ commodity + "_" + str(year) + ".csv"
+    local_dir_name = os.path.dirname(__file__)
+    file_path = local_dir_name + "/cache/" + cache_filename
+
+    if os.path.exists(file_path):   # If the data is available in the cache...
+        prices_df = pd.read_csv(file_path)
+        return(prices_df)
+    
+    date_str = "01/01/"+str(year)+":12/31/"+str(year)
+    filter_dict = {'commodity':commodity, 'report_begin_date':date_str}
+    filter_str = ""
+    for key in filter_dict.keys():
+        filter_str = filter_str+key+"="
+        filter_str = filter_str+filter_dict[key]+";"
+
+    url_append = "/"+slug_id +  "?q="+ filter_str + "&allSections=true"
+    response = get_mars_response(url_append)
+    raw_data = json.loads(response.text)
+    raw_df = pd.DataFrame(raw_data[1]['results'])
+    prices_df = raw_df[['report_date','slug_id', 'commodity','variety', 'package','item_size','properties','grade','organic',\
+                        'origin','low_price','high_price','unit_sales']]
+
+    raw_df.to_csv(file_path, index=False)
+    return(prices_df)
+
+# ------------------------------------------------------------------------------------------------------------------------------------
+# get_prices
+# Descriptions:
+#   OBtains the price data for a commodity available in USDA database for given years by joining together prices of each year. The 
+#   function doesn't offer any flexibility with respect to using filters, such as requesting data only related to organic produce, 
+#   specific variety of the produce etc., simply because the data retreived without filters is only a few MBs.
+#   
+# Inputs:
+#   commodity
+#       The name of the commodity as it appears in the USDA database. To see a list of possible commodities, use the function 
+#       get_commodities_list(). This parameter is mandatory. 
+#   slug_id 
+#       The market identification number (string)  corresponding to the terminal market in USDA database. USDA calls this "slug_id" for  
+#       unknown reason. It is a 4 digits numeric ID. To see a list of terminal makets and their corresponding slug_ids, use the function
+#       get_markets_list(). This parameter is mandatory.
 #   start_year
 #       Starting year as a number (and not a string) in YYYY format. This parameter is mandatory
 #   end_year
 #       Ending year as a number (and not a string) in YYYY format. This parameter is optional. If it is not specified, data just for the start_
 #       year will be returned
-#   market_name (mutually exclusive with slug_id)
-#       Propreitary market name. The function get_markets_list() outputs propreitary names and their slug-ids. This is used only when 
-#       slug_id isn't specified. Using slug_id may be preferred if the user wants to iterate over several markets. Using market_name
-#       may be preferred for demo code. This parameter is mandatory if slug_id isn't specified.
 #   debug_prints:
 #       This is used to display debug prints. The default value is True. User can set it to False if needed. 
 # Output
@@ -164,27 +210,18 @@ def get_market_name(slug_id):
 # Note: This function isn't recommended for obtaining daily updates or if you need data spanning part of one year and part of another
 #       year. For such purposes it is better to directly use the USDA MARS API functions.
 # ------------------------------------------------------------------------------------------------------------------------------------
-def get_prices(commodity, slug_id, start_year, end_year = None, market_name=None, debug_prints=True): 
+def get_prices(commodity, slug_id, start_year, end_year = None, debug_prints=True): 
+    start_prices_df = get_prices_1y(commodity=commodity, slug_id=slug_id, year=start_year)
     if end_year is None:
-        end_year = start_year
-    date_str = "01/01/"+str(start_year)+":12/31/"+str(end_year)
-    filter_dict = {'commodity':commodity, 'report_begin_date':date_str}
-    filter_str = ""
-    for key in filter_dict.keys():
-        filter_str = filter_str+key+"="
-        filter_str = filter_str+filter_dict[key]+";"
-    #print(filter_str)
-
-    url_append = "/"+slug_id +  "?q="+ filter_str + "&allSections=true"
-    response = get_mars_response(url_append)
-    raw_data = json.loads(response.text)
-    raw_df = pd.DataFrame(raw_data[1]['results'])
-    prices_df = raw_df[['report_date','slug_id', 'commodity','variety', 'package','item_size','properties','grade','organic',\
-                        'origin','low_price','high_price','unit_sales']]
-    market_name = get_market_name(slug_id)
-    market_name1 = "_".join(market_name.split())
-    cache_filename = market_name1 + "_" + str(start_year) + ".csv"
-    raw_df.to_csv('cache/'+cache_filename)
+        return(start_prices_df)
+    
+    temp_dfs=[]
+    temp_dfs.append(start_prices_df)
+    for year in range(start_year+1, end_year+1):
+        temp_df = get_prices_1y(commodity=commodity, slug_id=slug_id, year=year)
+        temp_dfs.append(temp_df)
+    
+    prices_df = pd.concat(temp_dfs, ignore_index=True)
     return(prices_df)
         
 # ------------------------------------------------------------------------------------------------------------------------------------
@@ -237,4 +274,56 @@ def get_commodities_list(slug_id, market_name=None):
     return(commodities_list)
 
     
+# ------------------------------------------------------------------------------------------------------------------------------------
+# get_package_weight_map
+# Description:
+#   In the price data returned by the MARS API, the prices do not have a common unit like $/per pound and instead it is price for the
+# package it is listed against. Due to various package types every commodity could have, we use this funciton to map package types
+# of different commodities to their equivalent in pounds. This is done based on the data supplied by USDA - they went and measured,
+# for every commodity, the weight of different package types in pounds. 
+#
+# Inputs
+#   input_df: A dataframe containing four columns
+#   commodity
+#       The commodity as used in the MARS API. This parameter is mandatory. 
+#   variety_list
+#       A list of varieties of the given commodity as used in the MARS API. This parameter is mandatory. 
+# Output
+#   A dataframe that contains the mapping between different package types and their corresponding weight in pounds.
+#   dataframe keys will be: commodity, variety, package, pounds
+# ------------------------------------------------------------------------------------------------------------------------------------
+def get_package_weight_map(commodity, variety_list):
+    commodity_col=[]
+    variety_col=[]
+    package_col=[]
+    pounds_col=[]
+    print("Unique varieties and packaging types")
+    for variety in variety_list:
+        print("Variety: "+variety)
+        for package in prices_df[prices_df["variety"]==variety]["package"].unique():
+            print("\t"+package)
+            pounds = None
+            words_list = (package.replace("/"," ")).split(" ")
+            if "lb" in package:
+                pounds = int(words_list[words_list.index("lb")-1])
+            elif "kg" in package:
+                pounds = int(words_list[words_list.index("kg")-1]*2.2)  # 1kg = 2.2lb
+            else:
+                package_to_pounds = pd.read_csv("packagetype_to_pounds.csv")
+                tonw_commodity = package_to_pounds[(package_to_pounds["MARS commodity"] == commodity)
+                                                & (package_to_pounds["MARS variety"] == variety)].loc[0]["table of net weights commodity"]
+                if tonw_commodity is not None:  # TONW = Table of Net Weights
+                    tonw_df = pd.read_excel("table of net weights corrected names.xlsx")
+                    sub_tonw_df = tonw_df[(tonw_df["Commodity"] == tonw_commodity)
+                                        & (tonw_df["Pack Description"] == package)]
+                    if not sub_tonw_df.empty:
+                        pound = int(sub_tonw_df.iloc[0]["Package Weight"])
+
+            commodity_col.append(commodity)
+            variety_col.append(variety)
+            package_col.append(package)
+            pounds_col.append(pounds)
+
+    pound_mapper = pd.DataFrame({"commodity":commodity_col, "variety":variety_col, "package":package_col, "pounds":pounds_col})
+    print(pound_mapper)
 
