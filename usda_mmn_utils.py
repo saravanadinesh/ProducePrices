@@ -287,43 +287,68 @@ def get_commodities_list(slug_id, market_name=None):
 #   commodity
 #       The commodity as used in the MARS API. This parameter is mandatory. 
 #   variety_list
-#       A list of varieties of the given commodity as used in the MARS API. This parameter is mandatory. 
+#       A list of varieties of the given commodity as used in the MARS API. This parameter is mandatory.
+#   package_types
+#       A list of package types for the commodity. This parameter is mandatory 
+#   debug_prints
+#       Boolean variable. If set, it will print error information, if there is any error.
 # Output
 #   A dataframe that contains the mapping between different package types and their corresponding weight in pounds.
 #   dataframe keys will be: commodity, variety, package, pounds
 # ------------------------------------------------------------------------------------------------------------------------------------
-def get_package_weight_map(commodity, variety_list):
-    commodity_col=[]
-    variety_col=[]
-    package_col=[]
-    pounds_col=[]
-    print("Unique varieties and packaging types")
-    for variety in variety_list:
-        print("Variety: "+variety)
-        for package in prices_df[prices_df["variety"]==variety]["package"].unique():
-            print("\t"+package)
-            pounds = None
-            words_list = (package.replace("/"," ")).split(" ")
-            if "lb" in package:
-                pounds = int(words_list[words_list.index("lb")-1])
-            elif "kg" in package:
-                pounds = int(words_list[words_list.index("kg")-1]*2.2)  # 1kg = 2.2lb
-            else:
-                package_to_pounds = pd.read_csv("packagetype_to_pounds.csv")
-                tonw_commodity = package_to_pounds[(package_to_pounds["MARS commodity"] == commodity)
-                                                & (package_to_pounds["MARS variety"] == variety)].loc[0]["table of net weights commodity"]
-                if tonw_commodity is not None:  # TONW = Table of Net Weights
-                    tonw_df = pd.read_excel("table of net weights corrected names.xlsx")
-                    sub_tonw_df = tonw_df[(tonw_df["Commodity"] == tonw_commodity)
-                                        & (tonw_df["Pack Description"] == package)]
-                    if not sub_tonw_df.empty:
-                        pound = int(sub_tonw_df.iloc[0]["Package Weight"])
+def get_package_weight_map(commodity, variety_list, package_types, debug_prints = False):
+    
+    # Check if the commodity already has a package to pounds conversion table
+    MARS_to_TONW = pd.read_csv("MARS_to_TONW.csv")  # TONW = Table of Net Weights
+    mars_to_tonw_df = MARS_to_TONW[MARS_to_TONW['MARS commodity'] == commodity]
+    if mars_to_tonw_df.empty:
+        if debug_prints == True:
+            print("Please populate \'MARS commodity\', \'MARS variety\', \'tonw commodity\' for "+commodity\
+                  + "in MARS_to_TONW.csv file")
+        return(None)
+    else:
+        package_to_pounds = pd.read_csv("package_to_pounds.csv")
+        temp_df = package_to_pounds[(package_to_pounds['commodity'] == commodity) & (package_to_pounds['variety'].isin(variety_list))]
+        if not temp_df.empty:
+            if all(variety_list in temp_df.variety):
+                if all(package_types in temp_df.package):
+                    return(temp_df)
 
-            commodity_col.append(commodity)
-            variety_col.append(variety)
-            package_col.append(package)
-            pounds_col.append(pounds)
+        else:
+            commodity_col=[]
+            variety_col=[]
+            package_col=[]
+            pounds_col=[]
+            for variety in variety_list:
+                for package in package_types:
+                    pounds = None
+                    words_list = (package.replace("/"," ")).split(" ")
+                    if "lb" in package:
+                        pounds = int(words_list[words_list.index("lb")-1])
+                    elif "kg" in package:
+                        pounds = int(words_list[words_list.index("kg")-1]*2.2)  # 1kg = 2.2lb
+                    else:
+                        if not mars_to_tonw_df[mars_to_tonw_df["MARS variety"] == variety].empty:
+                            tonw_commodity = mars_to_tonw_df[mars_to_tonw_df["MARS variety"] == variety].iloc[0]["tonw commodity"]
+                            if tonw_commodity is not None:  # TONW = Table of Net Weights
+                                tonw_df = pd.read_excel("table of net weights corrected names.xlsx")
+                                sub_tonw_df = tonw_df[(tonw_df["Commodity"] == tonw_commodity) & (tonw_df["Pack Description"] == package)]
+                                if not sub_tonw_df.empty:
+                                    pounds = int(sub_tonw_df.iloc[0]["Package Weight"])
 
-    pound_mapper = pd.DataFrame({"commodity":commodity_col, "variety":variety_col, "package":package_col, "pounds":pounds_col})
-    print(pound_mapper)
+                    commodity_col.append(commodity)
+                    variety_col.append(variety)
+                    package_col.append(package)
+                    pounds_col.append(pounds)
+
+            pound_mapper = pd.DataFrame({"commodity":commodity_col, "variety":variety_col, "package":package_col, "pounds":pounds_col})
+            if not (set(package_types).issubset(set(pound_mapper.package)) and set(variety_list).issubset(set(pound_mapper.variety))):
+                if debug_prints == True:
+                    print("Some package types are missing in the mapping table")
+            
+            package_to_pounds_new = pd.concat([package_to_pounds, pound_mapper])
+            package_to_pounds_new.to_csv("package_to_pounds.csv", index=False)
+            return(pound_mapper)
+
+    
 
