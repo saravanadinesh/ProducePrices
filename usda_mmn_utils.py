@@ -174,10 +174,12 @@ def get_prices_1y(commodity, slug_id, year, debug_prints=True):
     response = get_mars_response(url_append)
     raw_data = json.loads(response.text)
     raw_df = pd.DataFrame(raw_data[1]['results'])
-    prices_df = raw_df[['report_date','slug_id', 'commodity','variety', 'package','item_size','properties','grade','organic',\
-                        'origin','low_price','high_price','unit_sales']]
+    raw_df['date'] = pd.to_datetime(raw_df['report_date'])
+    raw_df.loc[:, 'price'] = (raw_df.loc[:,'high_price'].astype('float')+raw_df.loc[:,'low_price'].astype('float'))/2
+    prices_df = raw_df[['date','slug_id', 'commodity','variety', 'package','item_size','properties','grade','organic',\
+                        'origin','price','unit_sales']]
 
-    raw_df.to_csv(file_path, index=False)
+    prices_df.to_csv(file_path, index=False)
     return(prices_df)
 
 # ------------------------------------------------------------------------------------------------------------------------------------
@@ -349,6 +351,7 @@ def get_package_weight_map(commodity, variety_list, package_types, debug_prints 
                 print("Some variety or package type are missing in the mapping table")
         
         package_to_pounds_new = pd.concat([package_to_pounds, pound_mapper])
+        package_to_pounds_new.drop_duplicates(inplace=True)
         package_to_pounds_new.to_csv("package_to_pounds.csv", index=False)
         return(pound_mapper)
 
