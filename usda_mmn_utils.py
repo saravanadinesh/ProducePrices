@@ -174,7 +174,7 @@ def get_prices_1y(commodity, slug_id, year, debug_prints=True):
     response = get_mars_response(url_append)
     raw_data = json.loads(response.text)
     raw_df = pd.DataFrame(raw_data[1]['results'])
-    raw_df['date'] = pd.to_datetime(raw_df['report_date'])
+    raw_df['date'] = pd.to_datetime(raw_df['report_date'], format="%m/%d/%Y")
     raw_df.loc[:, 'price'] = (raw_df.loc[:,'high_price'].astype('float')+raw_df.loc[:,'low_price'].astype('float'))/2
     prices_df = raw_df[['date','slug_id', 'commodity','variety', 'package','item_size','properties','grade','organic',\
                         'origin','price','unit_sales']]
@@ -289,17 +289,16 @@ def get_commodities_list(slug_id, market_name=None):
 #   input_df: A dataframe containing four columns
 #   commodity
 #       The commodity as used in the MARS API. This parameter is mandatory. 
-#   variety_list
-#       A list of varieties of the given commodity as used in the MARS API. This parameter is mandatory.
-#   package_types
-#       A list of package types for the commodity. This parameter is mandatory 
+#   variety_package
+#       A 2-D tuple of varieties and associated package types of the given commodity as used in the MARS API. This parameter is 
+#       mandatory.
 #   debug_prints
 #       Boolean variable. If set, it will print error information, if there is any error.
 # Output
 #   A dataframe that contains the mapping between different package types and their corresponding weight in pounds.
 #   dataframe keys will be: commodity, variety, package, pounds
 # ------------------------------------------------------------------------------------------------------------------------------------
-def get_package_weight_map(commodity, variety_list, package_types, debug_prints = False):
+def get_package_weight_map(commodity, variety_package, debug_prints = False):
     
     # Check if the commodity already has a package to pounds conversion table
     MARS_to_TONW = pd.read_csv("MARS_to_TONW.csv")  # TONW = Table of Net Weights
@@ -311,20 +310,21 @@ def get_package_weight_map(commodity, variety_list, package_types, debug_prints 
         return(None)
     else:
         package_to_pounds = pd.read_csv("package_to_pounds.csv")
-        temp_df = package_to_pounds[(package_to_pounds['commodity'] == commodity) & (package_to_pounds['variety'].isin(variety_list))]
+        temp_df = package_to_pounds[(package_to_pounds['commodity'] == commodity)]
         if not temp_df.empty:
-            if set(variety_list).issubset(set(temp_df.variety.unique())):
-                if set(package_types).issubset(set(temp_df.package.unique())):
-                    if not np.isnan(temp_df.pounds.values).any():
-                        print("I shouldn't be here")
-                        return(temp_df)
+            p2p_tuples = tuple(map(tuple, temp_df[['variety', 'package']].drop_duplicates().values))
+            if set(variety_package).issubset(set(p2p_tuples)):
+                if not np.isnan(temp_df.pounds.values).any():
+                    return(temp_df)
 
         commodity_col=[]
         variety_col=[]
         package_col=[]
         pounds_col=[]
-        for variety in variety_list:
-            for package in package_types:
+        for (variety, package) in variety_package:
+            if package_to_pounds[(package_to_pounds['commodity'] == commodity) &\
+                                 (package_to_pounds['variety'] == variety)  &\
+                                 (package_to_pounds['package'] == package)].empty:
                 pounds = None
                 words_list = (package.replace("/"," ")).split(" ")
                 if "lb" in package:
@@ -346,14 +346,12 @@ def get_package_weight_map(commodity, variety_list, package_types, debug_prints 
                 pounds_col.append(pounds)
 
         pound_mapper = pd.DataFrame({"commodity":commodity_col, "variety":variety_col, "package":package_col, "pounds":pounds_col})
-        if not (set(package_types).issubset(set(pound_mapper.package)) and set(variety_list).issubset(set(pound_mapper.variety))):
-            if debug_prints == True:
-                print("Some variety or package type are missing in the mapping table")
         
         package_to_pounds_new = pd.concat([package_to_pounds, pound_mapper])
         package_to_pounds_new.drop_duplicates(inplace=True)
         package_to_pounds_new.to_csv("package_to_pounds.csv", index=False)
-        return(pound_mapper)
+
+        return(package_to_pounds_new)
 
     
 
