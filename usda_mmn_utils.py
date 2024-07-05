@@ -272,6 +272,7 @@ def get_commodities_list(slug_id, market_name=None):
         prices_df = raw_df[['report_date','slug_id', 'commodity','variety', 'package','item_size','properties','grade','organic',\
                             'origin','low_price','high_price','unit_sales']]
         commodities_list = list(prices_df['commodity'].unique())
+        commodities_list.sort()
         with open(filename, 'wb') as fp:
             pickle.dump(commodities_list, fp)
     return(commodities_list)
